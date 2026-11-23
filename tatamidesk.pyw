@@ -35,7 +35,7 @@ IS_WIN = sys.platform == "win32"
 APP_NAME = "Tatami Desk"
 APP_ID = "TatamiDesk"          # dossier de donnees, registre, exe
 OLD_ID = "Mini" + "Fen" + "ces"      # nom de la version de developpement (migration)
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 _MUTEX = None
 MIME = "application/x-tatamidesk-item"
 
@@ -45,7 +45,8 @@ CONFIG = os.path.join(DATA_DIR, "config.json")
 
 ACCENTS = [("Blanc", "#E5E7EB"), ("Bleu", "#4C8BF5"), ("Turquoise", "#14B8A6"),
            ("Vert", "#22C55E"), ("Jaune", "#EAB308"), ("Orange", "#F97316"),
-           ("Rouge", "#EF4444"), ("Rose", "#EC4899"), ("Violet", "#8B5CF6")]
+           ("Rouge", "#EF4444"), ("Rose", "#EC4899"), ("Violet", "#8B5CF6"),
+           ("Cyan néon", "#00E5FF"), ("Vert néon", "#39FF14"), ("Magenta néon", "#FF2BD6")]
 
 # Themes : tout est peint par l'app, changer de theme ne coute rien en ressources.
 THEMES = {
@@ -353,13 +354,17 @@ _icon_cache = {}
 
 
 def icon_for(path):
+    """Icone d'un fichier : sous Windows, la meme que l'Explorateur (48 px, raccourcis .lnk et .url de jeux
+    compris) ; sinon celle de Qt."""
     global _icon_provider
     key = os.path.normcase(path)
     ic = _icon_cache.get(key)
     if ic is None:
-        if _icon_provider is None:
-            _icon_provider = QFileIconProvider()
-        ic = _icon_provider.icon(QFileInfo(path))
+        ic = win_file_icon(path)
+        if ic is None:
+            if _icon_provider is None:
+                _icon_provider = QFileIconProvider()
+            ic = _icon_provider.icon(QFileInfo(path))
         _icon_cache[key] = ic
     return ic
 
@@ -419,24 +424,54 @@ def win_shell_icon(parsing_name):
         sh.SHGetFileInfoW.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
         sh.SHGetFileInfoW(pidl, 0, ctypes.byref(sfi), ctypes.sizeof(sfi), 0x4000 | 0x8)  # SYSICONINDEX|PIDL
         ctypes.windll.ole32.CoTaskMemFree(pidl)
+        return _sys_image_icon(sfi.iIcon)
+    except Exception:
+        return None
 
-        class GUID(ctypes.Structure):
-            _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD),
-                        ("d4", ctypes.c_ubyte * 8)]
-        iid = GUID(0x46EB5926, 0x582E, 0x4017, (ctypes.c_ubyte * 8)(0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50))
-        himl = ctypes.c_void_p()
-        sh.SHGetImageList.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
-        if sh.SHGetImageList(2, ctypes.byref(iid), ctypes.byref(himl)) != 0:   # SHIL_EXTRALARGE (48 px)
+
+def _sys_image_icon(index):
+    """Icone n° index de la liste d'images systeme de Windows, en 48 px (SHIL_EXTRALARGE)."""
+    from ctypes import wintypes
+    sh = ctypes.windll.shell32
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD),
+                    ("d4", ctypes.c_ubyte * 8)]
+    iid = GUID(0x46EB5926, 0x582E, 0x4017, (ctypes.c_ubyte * 8)(0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50))
+    himl = ctypes.c_void_p()
+    sh.SHGetImageList.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    if sh.SHGetImageList(2, ctypes.byref(iid), ctypes.byref(himl)) != 0:   # SHIL_EXTRALARGE (48 px)
+        return None
+    cc = ctypes.windll.comctl32
+    cc.ImageList_GetIcon.restype = ctypes.c_void_p
+    cc.ImageList_GetIcon.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint]
+    hicon = cc.ImageList_GetIcon(himl, index, 1)    # ILD_TRANSPARENT
+    if not hicon:
+        return None
+    ic = _win_icon_to_qicon(hicon, 48)
+    ctypes.windll.user32.DestroyIcon(ctypes.c_void_p(hicon))
+    return ic
+
+
+def win_file_icon(path):
+    """Icone d'un fichier telle que l'Explorateur l'affiche (gere les .url de Steam / Epic / Ubisoft)."""
+    if not IS_WIN or not os.path.exists(path):
+        return None
+    try:
+        from ctypes import wintypes
+
+        class SHFILEINFOW(ctypes.Structure):
+            _fields_ = [("hIcon", ctypes.c_void_p), ("iIcon", ctypes.c_int), ("dwAttributes", wintypes.DWORD),
+                        ("szDisplayName", ctypes.c_wchar * 260), ("szTypeName", ctypes.c_wchar * 80)]
+        sh = ctypes.windll.shell32
+        sh.SHGetFileInfoW.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        sh.SHGetFileInfoW.restype = ctypes.c_size_t
+        buf = ctypes.create_unicode_buffer(os.path.normpath(path))
+        sfi = SHFILEINFOW()
+        if not sh.SHGetFileInfoW(ctypes.cast(buf, ctypes.c_void_p), 0, ctypes.byref(sfi),
+                                 ctypes.sizeof(sfi), 0x4000):          # SHGFI_SYSICONINDEX
             return None
-        cc = ctypes.windll.comctl32
-        cc.ImageList_GetIcon.restype = ctypes.c_void_p
-        cc.ImageList_GetIcon.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint]
-        hicon = cc.ImageList_GetIcon(himl, sfi.iIcon, 1)    # ILD_TRANSPARENT
-        if not hicon:
-            return None
-        ic = _win_icon_to_qicon(hicon, 48)
-        ctypes.windll.user32.DestroyIcon(ctypes.c_void_p(hicon))
-        return ic
+        return _sys_image_icon(sfi.iIcon)
     except Exception:
         return None
 
@@ -1429,6 +1464,9 @@ class Zone(QWidget):
         self.move(pg.left() + 40, pg.top() + 40)
 
     def set_color(self, col):
+        if self.app.uniform_accent:                # toutes les zones ont la meme couleur : on change celle-la
+            self.app.set_uniform_accent(col)
+            return
         self.data["color"] = col
         self.update()
         self.tabbar.update()
@@ -1639,7 +1677,7 @@ class Zone(QWidget):
             p.setPen(QPen(g, 4))
             p.drawPath(path)
         if ba:
-            bg_ = T.get("border_gradient")
+            bg_ = None if self.app.uniform_accent else T.get("border_gradient")
             if bg_:
                 lg = QLinearGradient(0, 0, self.width(), self.height())
                 c0, c1 = QColor(bg_[0]), QColor(bg_[1])
@@ -1792,6 +1830,12 @@ class Zone(QWidget):
         for name, col in ACCENTS:
             act = make_sticky(cm.addAction(color_icon(col), name))
             act.triggered.connect(lambda _=False, c=col: self.set_color(c))
+        cm.addSeparator()
+        if a.uniform_accent:
+            cm.addAction("Une couleur différente par zone", lambda: a.set_uniform_accent(None))
+        else:
+            cm.addAction("Même couleur pour toutes les zones",
+                         lambda: a.set_uniform_accent(a.accent_for(self).name()))
         m.addAction("Déplier" if self.data.get("collapsed") else "Replier", self.toggle_collapse)
         m.addSeparator()
         screens = QGuiApplication.screens()
@@ -2217,6 +2261,36 @@ class SettingsDialog(QDialog):
         cb = QPushButton("Personnaliser ce thème…")
         cb.clicked.connect(self.app.open_theme_dialog)
         g.addWidget(cb)
+        gc = self._group(lay, "Couleur des zones")
+        self.r_multi = QRadioButton("Une couleur différente par zone (clic droit sur une zone > Couleur d'accent)")
+        self.r_uni = QRadioButton("La même couleur pour toutes les zones :")
+        self.col_group = QButtonGroup(self)
+        self.col_group.addButton(self.r_multi)
+        self.col_group.addButton(self.r_uni)
+        gc.addWidget(self.r_multi)
+        gc.addWidget(self.r_uni)
+        sw = QHBoxLayout()
+        sw.setSpacing(6)
+        self.swatches = []
+        for name, col in ACCENTS:
+            b = QPushButton()
+            b.setFixedSize(24, 24)
+            b.setToolTip(name)
+            b.clicked.connect(lambda _=False, c=col: self.app.set_uniform_accent(c))
+            sw.addWidget(b)
+            self.swatches.append((col, b))
+        other = QPushButton("Autre…")
+        other.clicked.connect(self.pick_uniform)
+        sw.addWidget(other)
+        sw.addStretch(1)
+        gc.addLayout(sw)
+        hint = QLabel("La couleur choisie remplace aussi celle imposée par certains thèmes (Zen, Futuriste…).")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        gc.addWidget(hint)
+        self.r_multi.toggled.connect(lambda on: on and (not self.loading) and self.app.set_uniform_accent(None))
+        self.r_uni.toggled.connect(lambda on: on and (not self.loading) and self.app.set_uniform_accent(
+            self.app.uniform_accent or "#00E5FF"))
         g2 = self._group(lay, "Icônes")
         self.size_combo = QComboBox()
         for k, label in SIZE_LABELS:
@@ -2450,6 +2524,18 @@ class SettingsDialog(QDialog):
         if not self.loading:
             self.app.set_snap(gap=v)
 
+    def pick_uniform(self):
+        c = QColorDialog.getColor(QColor(self.app.uniform_accent or "#00E5FF"), self, "Couleur des zones")
+        if c.isValid():
+            self.app.set_uniform_accent(c.name())
+
+    def _paint_swatches(self):
+        cur = (self.app.uniform_accent or "").lower()
+        for col, b in self.swatches:
+            sel = col.lower() == cur
+            b.setStyleSheet(f"QPushButton{{background:{col}; border:{3 if sel else 1}px solid "
+                            f"{'#FFFFFF' if sel else '#555'}; border-radius:12px;}}")
+
     def restore(self):
         name = self.backup_combo.currentData()
         if name:
@@ -2464,6 +2550,8 @@ class SettingsDialog(QDialog):
         ThemeDialog._select(self.theme_combo, a.theme_key)
         ThemeDialog._select(self.size_combo, a.size_key)
         self.c_blur.setChecked(a.blur)
+        (self.r_uni if a.uniform_accent else self.r_multi).setChecked(True)
+        self._paint_swatches()
         self.qh_radios[a.qh_mode].setChecked(True)
         self._fill_dest(self.r_dest, False)
         self._fill_dest(self.default_combo, True)
@@ -2501,6 +2589,7 @@ class TatamiApp:
         self.locked = cfg.get("locked", False)
         self.move_files = cfg.get("move_files", True)
         self.blur = cfg.get("blur", True)
+        self.uniform_accent = cfg.get("uniform_accent")
         self.theme_key = cfg.get("theme", "sombre") if cfg.get("theme") in THEMES else "sombre"
         self.theme_over = cfg.get("theme_overrides", {}) or {}
         self.theme = self.merged_theme(self.theme_key)
@@ -2607,7 +2696,7 @@ class TatamiApp:
     def save(self):
         if getattr(self, "no_save", False):
             return
-        cfg = {"locked": self.locked, "move_files": self.move_files, "blur": self.blur, "theme": self.theme_key, "theme_overrides": self.theme_over, "quick_hide": self.qh_mode, "snap_on": self.snap_on,
+        cfg = {"locked": self.locked, "move_files": self.move_files, "blur": self.blur, "uniform_accent": self.uniform_accent, "theme": self.theme_key, "theme_overrides": self.theme_over, "quick_hide": self.qh_mode, "snap_on": self.snap_on,
                "snap_dist": SNAP_DIST, "zone_gap": ZONE_GAP, "rules": self.rules,
                "default_dest": self.default_dest, "auto_sort": self.auto_sort,
                "tile_size": self.size_key, "zones": [f.data for f in self.zones.values()]}
@@ -2923,8 +3012,16 @@ class TatamiApp:
         return t
 
     def accent_for(self, zone):
+        if self.uniform_accent:                       # meme couleur pour toutes les zones
+            return QColor(self.uniform_accent)
         acc = self.theme.get("accent")
         return QColor(acc) if acc else QColor(zone.data.get("color", "#4C8BF5"))
+
+    def set_uniform_accent(self, col):
+        self.uniform_accent = col or None
+        self._apply_look()
+        if self.settings_dialog and self.settings_dialog.isVisible():
+            self.settings_dialog.load()
 
     def set_theme(self, key):
         self.theme_key = key

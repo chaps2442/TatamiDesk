@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.0 (2026-11-23)
+
+- Icônes : elles viennent maintenant de Windows lui-même, comme dans l'Explorateur, en 48 px. Les raccourcis de jeux (Steam, Epic, Ubisoft, fichiers .url) affichent leur vraie icône au lieu d'une page blanche, et les icônes ne sont plus pixelisées.
+- Couleur des zones : choix entre une couleur différente par zone ou la même couleur pour toutes, dans Paramètres > Apparence ou dans le clic droit d'une zone. La couleur choisie remplace aussi celle imposée par un thème.
+- Trois couleurs néon en plus : cyan, vert et magenta.
+
 ## v1.0.0 (2026-11-18)
 
 Première version publique.

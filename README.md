@@ -38,6 +38,7 @@ L'application est légère : elle ne fait aucun calcul quand on ne la touche pas
 
 **Apparence**
 - 13 thèmes : Sombre, Classique, Verre clair, Minimal, Néon, Graphite, Zen (papier washi), Zen nuit, Futuriste (HUD), Néon Sunset, Palmiers au crépuscule, Cyber, Rouge & anthracite.
+- Une couleur par zone ou la même pour toutes, au choix.
 - Chaque thème est personnalisable en direct : opacité, couleurs, accent, arrondi, forme, bordure, halo, style des onglets, police, décoration.
 - Flou d'arrière-plan géré par Windows (aucun coût pour l'application).
 
