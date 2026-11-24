@@ -35,7 +35,7 @@ IS_WIN = sys.platform == "win32"
 APP_NAME = "Tatami Desk"
 APP_ID = "TatamiDesk"          # dossier de donnees, registre, exe
 OLD_ID = "Mini" + "Fen" + "ces"      # nom de la version de developpement (migration)
-APP_VERSION = "1.1"
+APP_VERSION = "1.1.1"
 _MUTEX = None
 MIME = "application/x-tatamidesk-item"
 
@@ -664,10 +664,10 @@ def _win_class(hwnd):
     return buf.value
 
 
-def desktop_listview():
-    """Fenetre qui contient les icones du bureau (SysListView32 dans SHELLDLL_DefView)."""
+def desktop_windows():
+    """(SHELLDLL_DefView, SysListView32) du bureau, ou (None, None)."""
     if not IS_WIN:
-        return None
+        return None, None
     u = ctypes.windll.user32
     u.FindWindowW.restype = ctypes.c_void_p
     u.FindWindowExW.restype = ctypes.c_void_p
@@ -683,8 +683,12 @@ def desktop_listview():
             break
         defview = u.FindWindowExW(w, None, "SHELLDLL_DefView", None)
     if not defview:
-        return None
-    return u.FindWindowExW(defview, None, "SysListView32", None)
+        return None, None
+    return defview, u.FindWindowExW(defview, None, "SysListView32", None)
+
+
+def desktop_listview():
+    return desktop_windows()[1]
 
 
 class DesktopDoubleClick:
@@ -759,10 +763,85 @@ class DesktopDoubleClick:
         self.on_double()
 
 
-def set_desktop_icons_visible(on):
+def desktop_icons_visible():
     lv = desktop_listview()
-    if lv:
-        ctypes.windll.user32.ShowWindow(ctypes.c_void_p(lv), 5 if on else 0)
+    if not lv:
+        return True
+    ctypes.windll.user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    return bool(ctypes.windll.user32.IsWindowVisible(lv))
+
+
+def set_desktop_icons_visible(on):
+    """Meme commande que clic droit sur le bureau > Affichage > Afficher les icones du bureau :
+    l'Explorateur la respecte (un simple clic ne fait plus reapparaitre les icones)."""
+    if not IS_WIN:
+        return
+    defview, lv = desktop_windows()
+    if not defview or desktop_icons_visible() == bool(on):
+        return
+    u = ctypes.windll.user32
+    u.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.SendMessageW(defview, 0x0111, 0x7402, 0)       # WM_COMMAND, bascule des icones du bureau
+
+
+def close_old_version():
+    """Si l'ancienne version (developpement) tourne encore, propose de la fermer : sinon les deux
+    applications se marchent dessus (double-clic annule, elements introuvables)."""
+    if not IS_WIN:
+        return
+    k32, u = ctypes.windll.kernel32, ctypes.windll.user32
+    k32.OpenMutexW.restype = ctypes.c_void_p
+    h = k32.OpenMutexW(0x00100000, False, "Local\\" + OLD_ID + "SingleInstance")
+    if not h:
+        return
+    k32.CloseHandle(ctypes.c_void_p(h))
+    pids = set()
+    me = os.getpid()
+    proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def cb(hwnd, _lp):
+        buf = ctypes.create_unicode_buffer(64)
+        u.GetWindowTextW(ctypes.c_void_p(hwnd), buf, 64)
+        if buf.value == OLD_ID:
+            pid = ctypes.c_ulong()
+            u.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+            if pid.value and pid.value != me:
+                pids.add(pid.value)
+        return True
+    u.EnumWindows(proto(cb), None)
+    if not pids:
+        return
+    r = QMessageBox.question(None, APP_NAME,
+                             "L'ancienne version (" + OLD_ID + ") est encore ouverte.\n"
+                             "Les deux applications ne peuvent pas tourner en même temps.\n\n"
+                             "La fermer maintenant ?")
+    if r != QMessageBox.Yes:
+        return
+    k32.OpenProcess.restype = ctypes.c_void_p
+    for pid in pids:
+        hp = k32.OpenProcess(0x0001, False, pid)        # PROCESS_TERMINATE
+        if hp:
+            k32.TerminateProcess(ctypes.c_void_p(hp), 0)
+            k32.CloseHandle(ctypes.c_void_p(hp))
+
+
+def cleanup_old_traces():
+    """Supprime a chaque demarrage le lancement automatique et le raccourci de l'ancienne version."""
+    if not IS_WIN:
+        return
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                            winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as k:
+            winreg.QueryValueEx(k, OLD_ID)
+            winreg.DeleteValue(k, OLD_ID)
+    except OSError:
+        pass
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    try:
+        os.remove(os.path.join(base, "Microsoft", "Windows", "Start Menu", "Programs", OLD_ID + ".lnk"))
+    except OSError:
+        pass
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -2583,7 +2662,9 @@ class TatamiApp:
         self.pending = None
         self.drag_tile = None
         self.merge_target = None
+        close_old_version()
         migrate_old_install()
+        cleanup_old_traces()
         os.makedirs(STORE_DIR, exist_ok=True)
         cfg = self.load()
         self.locked = cfg.get("locked", False)
@@ -3244,8 +3325,12 @@ class TatamiApp:
             win_push_bottom(f)
 
     def quick_hide_toggle(self):
-        self.qh_hidden = not self.qh_hidden
         mode = self.qh_mode
+        if IS_WIN and mode in ("both", "icons"):
+            # on se cale sur l'etat reel des icones (au cas ou elles auraient ete changees ailleurs)
+            self.qh_hidden = desktop_icons_visible()
+        else:
+            self.qh_hidden = not self.qh_hidden
         if mode in ("both", "icons"):
             set_desktop_icons_visible(not self.qh_hidden)
         if mode in ("both", "zones"):

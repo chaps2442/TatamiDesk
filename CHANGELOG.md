@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.1 (2026-11-24)
+
+- Double-clic sur le bureau : les icônes sont masquées avec la commande officielle de Windows (Affichage > Afficher les icônes du bureau). Un simple clic ne les fait plus réapparaître.
+- Si l'ancienne version de développement tourne encore, Tatami Desk propose de la fermer au démarrage : les deux applications ensemble annulaient le double-clic et affichaient des éléments introuvables.
+- Nettoyage à chaque démarrage du lancement automatique et du raccourci de l'ancienne version.
+
 ## v1.1.0 (2026-11-23)
 
 - Icônes : elles viennent maintenant de Windows lui-même, comme dans l'Explorateur, en 48 px. Les raccourcis de jeux (Steam, Epic, Ubisoft, fichiers .url) affichent leur vraie icône au lieu d'une page blanche, et les icônes ne sont plus pixelisées.
