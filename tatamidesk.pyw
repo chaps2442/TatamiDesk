@@ -1064,6 +1064,8 @@ class ShellMenu:
         folder = desktop.BindToObject(pidl_f, None, shell.IID_IShellFolder)
         _, pidl_i, _ = folder.ParseDisplayName(0, None, name)
         cm = folder.GetUIObjectOf(0, [pidl_i], shell.IID_IContextMenu, 0)
+        if isinstance(cm, tuple):          # pywin32 rend (reserve, interface)
+            cm = cm[-1]
         hmenu = win32gui.CreatePopupMenu()
         callbacks = {}
         next_id = [0x7000]

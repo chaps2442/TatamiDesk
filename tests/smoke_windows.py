@@ -43,6 +43,8 @@ try:
     folder = desktop.BindToObject(pidl_f, None, shell.IID_IShellFolder)
     _, pidl_i, _ = folder.ParseDisplayName(0, None, name)
     cm = folder.GetUIObjectOf(0, [pidl_i], shell.IID_IContextMenu, 0)
+    if isinstance(cm, tuple):
+        cm = cm[-1]
     hmenu = win32gui.CreatePopupMenu()
     cm.QueryContextMenu(hmenu, 0, 1, 0x6FFF, shellcon.CMF_NORMAL)
     n = win32gui.GetMenuItemCount(hmenu)
