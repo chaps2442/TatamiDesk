@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.2 (2026-11-25)
+
+- Raccourcis de jeux en .url (Ubisoft, Steam, Epic...) : l'icône du jeu est lue directement dans le raccourci, au lieu du globe par défaut des liens internet.
+- Clic droit sur une icône > « Changer l'icône… » (fichier .ico, .png, .exe ou .dll) et « Icône d'origine » pour revenir en arrière.
+
 ## v1.1.1 (2026-11-24)
 
 - Double-clic sur le bureau : les icônes sont masquées avec la commande officielle de Windows (Affichage > Afficher les icônes du bureau). Un simple clic ne les fait plus réapparaître.

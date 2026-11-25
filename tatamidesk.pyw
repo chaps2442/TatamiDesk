@@ -25,7 +25,7 @@ from PySide6.QtCore import (QFileSystemWatcher, Qt, QPoint, QPointF, QRect, QRec
                             QFileInfo, QStandardPaths, QEvent)
 from PySide6.QtGui import (QBrush, QLinearGradient, QImage, QAbstractFileIconProvider, QGuiApplication, QPainter, QColor, QPainterPath, QDrag, QIcon, QPixmap, QFont,
                            QPen, QFontMetrics)
-from PySide6.QtWidgets import (QListWidget, QListWidgetItem, QStackedWidget, QRadioButton, QButtonGroup,
+from PySide6.QtWidgets import (QFileDialog, QListWidget, QListWidgetItem, QStackedWidget, QRadioButton, QButtonGroup,
                                QGroupBox, QDialog, QFormLayout, QSlider, QCheckBox, QComboBox, QFontComboBox,
                                QPushButton, QColorDialog, QLabel, QHBoxLayout,
                                QApplication, QWidget, QVBoxLayout, QLineEdit, QScrollArea,
@@ -35,7 +35,7 @@ IS_WIN = sys.platform == "win32"
 APP_NAME = "Tatami Desk"
 APP_ID = "TatamiDesk"          # dossier de donnees, registre, exe
 OLD_ID = "Mini" + "Fen" + "ces"      # nom de la version de developpement (migration)
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 _MUTEX = None
 MIME = "application/x-tatamidesk-item"
 
@@ -360,7 +360,7 @@ def icon_for(path):
     key = os.path.normcase(path)
     ic = _icon_cache.get(key)
     if ic is None:
-        ic = win_file_icon(path)
+        ic = win_url_icon(path) or win_file_icon(path)
         if ic is None:
             if _icon_provider is None:
                 _icon_provider = QFileIconProvider()
@@ -451,6 +451,70 @@ def _sys_image_icon(index):
     ic = _win_icon_to_qicon(hicon, 48)
     ctypes.windll.user32.DestroyIcon(ctypes.c_void_p(hicon))
     return ic
+
+
+def _url_icon_location(path):
+    """Lit IconFile / IconIndex d'un raccourci internet .url (Steam, Epic, Ubisoft...)."""
+    try:
+        raw = open(path, "rb").read(16384)
+    except OSError:
+        return None, 0
+    text = None
+    for enc in ("utf-8-sig", "utf-16", "mbcs" if IS_WIN else "latin-1", "latin-1"):
+        try:
+            t = raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        if "IconFile" in t or "URL=" in t:
+            text = t
+            break
+    if text is None:
+        return None, 0
+    icon_file, idx = None, 0
+    for line in text.splitlines():
+        k, _, v = line.partition("=")
+        k = k.strip().lower()
+        if k == "iconfile":
+            icon_file = os.path.expandvars(v.strip().strip('"'))
+        elif k == "iconindex":
+            try:
+                idx = int(v.strip())
+            except ValueError:
+                idx = 0
+    return icon_file, idx
+
+
+def icon_from_file(icon_file, idx=0):
+    """Icone depuis un .ico / .png (direct) ou depuis un .exe / .dll (ressource n° idx), en 48 px."""
+    if not icon_file or not os.path.exists(icon_file):
+        return None
+    ext = os.path.splitext(icon_file)[1].lower()
+    if ext in (".ico", ".png", ".jpg", ".jpeg", ".bmp", ".svg"):
+        ic = QIcon(icon_file)
+        return None if ic.isNull() else ic
+    if not IS_WIN:
+        return None
+    try:
+        u = ctypes.windll.user32
+        u.PrivateExtractIconsW.argtypes = [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                           ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint,
+                                           ctypes.c_uint]
+        h = ctypes.c_void_p()
+        n = u.PrivateExtractIconsW(icon_file, idx, 48, 48, ctypes.byref(h), None, 1, 0)
+        if n < 1 or not h.value or n == 0xFFFFFFFF:
+            return None
+        ic = _win_icon_to_qicon(h.value, 48)
+        u.DestroyIcon(h)
+        return ic
+    except Exception:
+        return None
+
+
+def win_url_icon(path):
+    if not path.lower().endswith((".url", ".website")):
+        return None
+    f, idx = _url_icon_location(path)
+    return icon_from_file(f, idx)
 
 
 def win_file_icon(path):
@@ -984,7 +1048,9 @@ class Tile(QWidget):
             self.text = SPECIALS.get(self.special, ("?", ""))[0]
         else:
             self.exists = os.path.exists(self.path)
-            self.icon = icon_for(self.path)
+            custom = item.get("icon")
+            self.icon = (icon_from_file(custom.get("file"), custom.get("index", 0)) if custom else None) \
+                or icon_for(self.path)
             self.text = display_name(self.path)
         self.hover = False
         self.press_pos = None
@@ -1061,6 +1127,23 @@ class Tile(QWidget):
         if e.button() == Qt.LeftButton:
             self.zone.app.launch(self.path)
 
+    def choose_icon(self):
+        f, _ = QFileDialog.getOpenFileName(None, "Choisir une icône", os.path.expanduser("~"),
+                                           "Icônes et programmes (*.ico *.png *.exe *.dll);;Tous les fichiers (*)")
+        if not f:
+            return
+        if icon_from_file(f, 0) is None:
+            QMessageBox.warning(None, APP_NAME, "Impossible de lire une icône dans ce fichier.")
+            return
+        self.item["icon"] = {"file": f, "index": 0}
+        self.zone.refresh()
+        self.zone.app.save_soon()
+
+    def reset_icon(self):
+        self.item.pop("icon", None)
+        self.zone.refresh()
+        self.zone.app.save_soon()
+
     def mouseMoveEvent(self, e):
         if self.press_pos is None or not (e.buttons() & Qt.LeftButton):
             return
@@ -1102,6 +1185,9 @@ class Tile(QWidget):
             m.addAction("Vider la corbeille", app.empty_recycle_bin)
         elif not self.special:
             m.addAction("Ouvrir l'emplacement", lambda: app.reveal(path))
+            m.addAction("Changer l'icône…", self.choose_icon)
+            if self.item.get("icon"):
+                m.addAction("Icône d'origine", self.reset_icon)
         tabs = self.zone.data["tabs"]
         if len(tabs) > 1:
             mv = m.addMenu("Déplacer vers l'onglet")
@@ -3618,6 +3704,11 @@ def main():
         _MUTEX = k32.CreateMutexW(None, False, "Local\\TatamiDeskSingleInstance")
         if k32.GetLastError() == 183:  # deja lance
             return
+    if IS_WIN:
+        try:
+            ctypes.windll.ole32.CoInitializeEx(None, 2)   # STA : necessaire aux extracteurs d'icones du shell
+        except Exception:
+            pass
     qapp = QApplication(sys.argv)
     qapp.setQuitOnLastWindowClosed(False)
     qapp.setStyle("Fusion")
