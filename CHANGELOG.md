@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.2.0 (2026-11-25)
+
+- Clic droit sur une icône : le vrai menu de l'Explorateur Windows (Ouvrir, Exécuter en tant qu'administrateur, Copier, Couper, Propriétés, Envoyer vers, entrées ajoutées par 7-Zip, l'antivirus...), avec les options de Tatami Desk en haut.
+- Clic droit sur une zone : « Coller » quand le presse-papiers contient des fichiers (copier = copie dans Tatami Desk, couper = déplacement).
+- Si un fichier est supprimé depuis le menu Windows, il disparaît aussi de la zone.
+- Test automatique des appels Windows à chaque fabrication de l'exe.
+
 ## v1.1.2 (2026-11-25)
 
 - Raccourcis de jeux en .url (Ubisoft, Steam, Epic...) : l'icône du jeu est lue directement dans le raccourci, au lieu du globe par défaut des liens internet.

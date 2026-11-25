@@ -23,6 +23,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
+      - name: Smoke test (Windows APIs)
+        continue-on-error: true
+        run: python tests/smoke_windows.py
+
       - name: Build exe
         run: python -m PyInstaller --onefile --windowed --name TatamiDesk --icon assets/tatamidesk.ico tatamidesk.pyw
 

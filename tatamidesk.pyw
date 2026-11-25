@@ -35,7 +35,7 @@ IS_WIN = sys.platform == "win32"
 APP_NAME = "Tatami Desk"
 APP_ID = "TatamiDesk"          # dossier de donnees, registre, exe
 OLD_ID = "Mini" + "Fen" + "ces"      # nom de la version de developpement (migration)
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.2.0"
 _MUTEX = None
 MIME = "application/x-tatamidesk-item"
 
@@ -998,6 +998,117 @@ def set_startup(on):
                 pass
 
 
+# --------------------------------------------------------------------------- menu Windows d'origine
+
+class ShellMenu:
+    """Menu contextuel de l'Explorateur pour un fichier (Copier, Propriétés, Envoyer vers, 7-Zip...),
+    avec nos propres entrées ajoutées en haut. Necessite pywin32 ; sinon on garde notre menu."""
+    _hwnd = None
+    _cm2 = None
+    _wndproc = None
+
+    @staticmethod
+    def available():
+        if not IS_WIN:
+            return False
+        try:
+            import win32gui  # noqa: F401
+            from win32com.shell import shell  # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def _window(cls):
+        if cls._hwnd:
+            return cls._hwnd
+        import win32gui
+        import win32api
+
+        def wndproc(hwnd, msg, wp, lp):
+            # sous-menus "Ouvrir avec", "Envoyer vers"... : dessines par le shell lui-meme
+            if cls._cm2 is not None and msg in (0x0117, 0x002B, 0x002C, 0x0120):
+                try:
+                    if hasattr(cls._cm2, "HandleMenuMsg2"):
+                        r = cls._cm2.HandleMenuMsg2(msg, wp, lp)
+                        return r if isinstance(r, int) else 0
+                    cls._cm2.HandleMenuMsg(msg, wp, lp)
+                    return 0
+                except Exception:
+                    pass
+            return win32gui.DefWindowProc(hwnd, msg, wp, lp)
+        cls._wndproc = wndproc
+        wc = win32gui.WNDCLASS()
+        wc.lpszClassName = "TatamiDeskShellMenu"
+        wc.lpfnWndProc = wndproc
+        wc.hInstance = win32api.GetModuleHandle(None)
+        try:
+            win32gui.RegisterClass(wc)
+        except Exception:
+            pass
+        cls._hwnd = win32gui.CreateWindow(wc.lpszClassName, "", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, None)
+        return cls._hwnd
+
+    @classmethod
+    def show(cls, path, extra):
+        """extra : liste de (texte, fonction) ou (texte, [sous-elements]) ou None (separateur).
+        Rend True si le menu a pu s'afficher."""
+        import win32gui
+        import win32con
+        import win32api
+        from win32com.shell import shell, shellcon
+        hwnd = cls._window()
+        folder_path, name = os.path.split(os.path.normpath(path))
+        desktop = shell.SHGetDesktopFolder()
+        _, pidl_f, _ = desktop.ParseDisplayName(0, None, folder_path)
+        folder = desktop.BindToObject(pidl_f, None, shell.IID_IShellFolder)
+        _, pidl_i, _ = folder.ParseDisplayName(0, None, name)
+        cm = folder.GetUIObjectOf(0, [pidl_i], shell.IID_IContextMenu, 0)
+        hmenu = win32gui.CreatePopupMenu()
+        callbacks = {}
+        next_id = [0x7000]
+
+        def add(menu, items):
+            for it in items:
+                if it is None:
+                    win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, None)
+                    continue
+                label, target = it
+                if isinstance(target, list):
+                    sub = win32gui.CreatePopupMenu()
+                    add(sub, target)
+                    win32gui.AppendMenu(menu, win32con.MF_POPUP | win32con.MF_STRING, sub, label)
+                else:
+                    next_id[0] += 1
+                    callbacks[next_id[0]] = target
+                    win32gui.AppendMenu(menu, win32con.MF_STRING, next_id[0], label)
+        add(hmenu, extra)
+        win32gui.AppendMenu(hmenu, win32con.MF_SEPARATOR, 0, None)
+        first, last = 1, 0x6FFF
+        cm.QueryContextMenu(hmenu, win32gui.GetMenuItemCount(hmenu), first, last, shellcon.CMF_NORMAL)
+        cls._cm2 = None
+        for iid in ("IID_IContextMenu3", "IID_IContextMenu2"):
+            try:
+                cls._cm2 = cm.QueryInterface(getattr(shell, iid))
+                break
+            except Exception:
+                continue
+        x, y = win32api.GetCursorPos()
+        win32gui.SetForegroundWindow(hwnd)
+        cmd = win32gui.TrackPopupMenu(hmenu, win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
+                                      x, y, 0, hwnd, None)
+        win32gui.PostMessage(hwnd, win32con.WM_NULL, 0, 0)
+        cls._cm2 = None
+        try:
+            if cmd in callbacks:
+                callbacks[cmd]()
+            elif first <= cmd <= last:
+                cm.InvokeCommand((0, hwnd, cmd - first, None, folder_path, win32con.SW_SHOWNORMAL, 0, None))
+        finally:
+            win32gui.DestroyMenu(hmenu)
+        return True
+
+
 # --------------------------------------------------------------------------- menu qui reste ouvert
 
 class StickyMenu(QMenu):
@@ -1177,6 +1288,37 @@ class Tile(QWidget):
             self.deleteLater()
 
     def contextMenuEvent(self, e):
+        e.accept()
+        if not self.special and self.exists and ShellMenu.available():
+            try:
+                self.show_shell_menu()
+                return
+            except Exception:
+                pass          # en cas de souci, on retombe sur notre menu
+        self.show_own_menu(e.globalPos())
+
+    def show_shell_menu(self):
+        app = self.zone.app
+        path = self.path
+        zone = self.zone
+        extra = []
+        tabs = zone.data["tabs"]
+        if len(tabs) > 1:
+            extra.append(("Déplacer vers l'onglet",
+                          [(t["name"], (lambda ti=i: app.move_item(path, zone.fid, ti, None)))
+                           for i, t in enumerate(tabs) if i != zone.active()]))
+        extra.append(("Changer l'icône…", self.choose_icon))
+        if self.item.get("icon"):
+            extra.append(("Icône d'origine", self.reset_icon))
+        if self.item.get("origin"):
+            extra.append(("Remettre sur le bureau", lambda: app.remove_item(path, restore=True)))
+        else:
+            extra.append(("Retirer de la zone", lambda: app.remove_item(path, restore=False)))
+        ShellMenu.show(path, extra)
+        # si le fichier a ete supprime ou deplace depuis le menu Windows, on met la zone a jour
+        QTimer.singleShot(1500, lambda: app.check_item(path))
+
+    def show_own_menu(self, gpos):
         app = self.zone.app
         path = self.path
         m = app.menu(self)
@@ -1202,8 +1344,7 @@ class Tile(QWidget):
             m.addAction("Retirer de la zone", lambda: app.remove_item(path, restore=False))
         else:
             m.addAction("Retirer de la zone", lambda: app.remove_item(path, restore=False))
-        m.exec(e.globalPos())
-        e.accept()
+        m.exec(gpos)
 
 
 # --------------------------------------------------------------------------- grille
@@ -1976,6 +2117,10 @@ class Zone(QWidget):
         t = self.active() if tab is None else tab
         m = a.menu(self)
         m.addAction("Paramètres…", a.open_settings)
+        clip, _cut = a.clipboard_paths()
+        if clip:
+            m.addAction(f"Coller ({len(clip)} élément{'s' if len(clip) > 1 else ''})",
+                        lambda: a.paste_into(self.fid, self.active()))
         m.addSeparator()
         m.addAction("Nouvel onglet", self.add_tab)
         m.addAction(f"Renommer « {tabs[t]['name']} »", lambda: self.tabbar.start_edit(t))
@@ -3339,6 +3484,52 @@ class TatamiApp:
             self.restore_file(it)
         f.data["tabs"][ti]["items"].remove(it)
         f.refresh()
+        self.save()
+
+    def check_item(self, path):
+        f, ti, it = self.find_item(path)
+        if f and not it.get("special") and not os.path.exists(path):
+            f.data["tabs"][ti]["items"].remove(it)
+            f.refresh()
+            self.save()
+
+    @staticmethod
+    def clipboard_paths():
+        md = QApplication.clipboard().mimeData()
+        if md is None or not md.hasUrls():
+            return [], False
+        paths = [u.toLocalFile() for u in md.urls() if u.isLocalFile() and os.path.exists(u.toLocalFile())]
+        cut = False
+        fmt = next((f for f in md.formats() if "Preferred DropEffect" in f), None)
+        if fmt:
+            b = bytes(md.data(fmt))
+            cut = len(b) >= 4 and struct.unpack_from("<I", b, 0)[0] == 2     # DROPEFFECT_MOVE
+        return paths, cut
+
+    def paste_into(self, fid, tab):
+        """Coller dans une zone : couper = deplacer, copier = copie dans le dossier de Tatami Desk."""
+        paths, cut = self.clipboard_paths()
+        z = self.zones.get(fid)
+        if not z or not paths:
+            return
+        for p in paths:
+            if self.find_item(p)[0]:
+                self.move_item(p, fid, tab, None)
+                continue
+            if cut or (self.move_files and is_on_desktop(p)):
+                self.add_external(fid, tab, [p], None)
+                continue
+            try:
+                name = os.path.basename(p.rstrip("\\/"))
+                dest = unique_path(STORE_DIR, name)
+                if os.path.isdir(p):
+                    shutil.copytree(p, dest)
+                else:
+                    shutil.copy2(p, dest)
+                self._insert(z, tab, {"path": dest}, None)
+            except OSError as ex:
+                QMessageBox.warning(None, APP_NAME, f"Impossible de coller :\n{p}\n\n{ex}")
+        z.refresh()
         self.save()
 
     def move_item(self, path, dfid, dtab, idx):
